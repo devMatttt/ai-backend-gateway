@@ -4,6 +4,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from ollama import AsyncClient
+from rag_service import search_similar_documents
 
 app = FastAPI(
     title="Async AI Backend Gateway",
@@ -64,6 +65,34 @@ async def stream_chat(request: ChatRequest):
 
     return StreamingResponse(
         event_stream_generator(request.prompt, request.model),
+        media_type="text/event-stream"
+    )
+
+@app.post("/api/v1/chat/rag")
+async def stream_rag_chat(request: ChatRequest):
+    """
+    Retrieves relevant database context using pgvector cosine search, 
+    injects context into the system prompt, and streams the answer.
+    """
+    if not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    # 1. Retrieve top 2 matching document chunks from Postgres
+    context_chunks = await search_similar_documents(request.prompt, limit=2)
+    context_str = "\n".join(f"- {c}" for c in context_chunks)
+
+    # 2. Construct Augmented Prompt
+    augmented_prompt = f"""Use the following facts to answer the question:
+
+Context:
+{context_str}
+
+Question: {request.prompt}
+Answer:"""
+
+    # 3. Stream through our existing generator
+    return StreamingResponse(
+        event_stream_generator(augmented_prompt, request.model),
         media_type="text/event-stream"
     )
 
