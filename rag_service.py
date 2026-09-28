@@ -1,18 +1,21 @@
 import json
 import asyncpg
+import os
 from pgvector.asyncpg import register_vector
 from ollama import AsyncClient
 
-# Database connection settings matching docker-compose.yml
+# Read DB connection settings from environment variables with local fallback
 DB_CONFIG = {
-    "user": "postgres",
-    "password": "password",
-    "database": "ai_memory",
-    "host": "127.0.0.1",
-    "port": 5432
+    "user": os.getenv("DB_USER", "postgres"),
+    "password": os.getenv("DB_PASSWORD", "password"),
+    "database": os.getenv("DB_NAME", "ai_memory"),
+    "host": os.getenv("DB_HOST", "127.0.0.1"),
+    "port": int(os.getenv("DB_PORT", 5432))
 }
 
-ollama_client = AsyncClient()
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+ollama_client = AsyncClient(host=OLLAMA_URL)
+
 EMBEDDING_MODEL = "nomic-embed-text"
 # nomic-embed-text outputs 768-dimensional vectors
 VECTOR_DIMENSIONS = 768 

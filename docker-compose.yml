@@ -1,15 +1,71 @@
+version: '3.8'
+
+networks:
+  ai-backend-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
 services:
+  # --- 1. FastAPI Application Gateway ---
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai_fastapi_gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=ai_memory
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - ai-backend-network
+    restart: unless-stopped
+
+  # --- 2. PostgreSQL + pgvector Database ---
   postgres:
     image: pgvector/pgvector:pg17
     container_name: ai_pgvector_db
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: ai_memory
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=ai_memory
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_memory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai-backend-network
+    restart: unless-stopped
 
-volumes:
-  pgdata:
+  # --- 3. Redis Cache Store ---
+  redis:
+    image: redis:7-alpine
+    container_name: ai_redis_cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - ai-backend-network
+    restart: unless-stopped

@@ -2,6 +2,7 @@ import json
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from ollama import AsyncClient
 from rag_service import search_similar_documents
@@ -95,6 +96,10 @@ Answer:"""
         event_stream_generator(augmented_prompt, request.model),
         media_type="text/event-stream"
     )
+
+@app.get("/")
+async def serve_frontend():
+    return FileResponse("index.html")
 
 if __name__ == "__main__":
     import uvicorn

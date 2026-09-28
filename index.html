@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Gateway Client</title>
+  <style>
+    :root { --bg: #0f172a; --card: #1e293b; --accent: #38bdf8; --text: #f8fafc; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 800px; background: var(--card); border-radius: 12px; height: 90vh; display: flex; flex-direction: column; }
+    .header { padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+    .chat-box { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+    .msg { padding: 12px 16px; border-radius: 8px; max-width: 80%; line-height: 1.5; white-space: pre-wrap; }
+    .user { align-self: flex-end; background: #334155; }
+    .assistant { align-self: flex-start; background: #0284c7; }
+    .input-area { padding: 16px 24px; border-top: 1px solid #334155; display: flex; gap: 12px; }
+    input { flex: 1; padding: 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: white; }
+    button { padding: 12px 24px; background: var(--accent); border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h2>🚀 AI Gateway Control Panel</h2>
+    <select id="mode" style="padding: 6px; background: #0f172a; color: white; border-radius: 4px;">
+      <option value="/api/v1/chat/stream">Standard Stream</option>
+      <option value="/api/v1/chat/rag">RAG Vector Stream</option>
+    </select>
+  </div>
+  <div class="chat-box" id="chat">
+    <div class="msg assistant">Ready! Choose a pipeline mode and send a prompt.</div>
+  </div>
+  <div class="input-area">
+    <input type="text" id="prompt" placeholder="Ask something..." onkeydown="if(event.key==='Enter') send()"/>
+    <button onclick="send()">Send</button>
+  </div>
+</div>
+<script>
+  async function send() {
+    const input = document.getElementById("prompt");
+    const mode = document.getElementById("mode").value;
+    const chat = document.getElementById("chat");
+    const text = input.value.trim();
+    if (!text) return;
+
+    appendMsg(text, "user");
+    input.value = "";
+    const botMsg = appendMsg("", "assistant");
+
+    try {
+      const res = await fetch(mode, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text })
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.replace("data: ", "").trim();
+            if (data === "[DONE]") break;
+            const parsed = JSON.parse(data);
+            if (parsed.token) {
+              botMsg.textContent += parsed.token;
+              chat.scrollTop = chat.scrollHeight;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      botMsg.textContent = "Error: " + e.message;
+    }
+  }
+  function appendMsg(text, role) {
+    const div = document.createElement("div");
+    div.className = `msg ${role}`;
+    div.textContent = text;
+    document.getElementById("chat").appendChild(div);
+    return div;
+  }
+</script>
+</body>
+</html>
