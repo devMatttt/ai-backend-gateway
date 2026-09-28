@@ -4,33 +4,31 @@ import os
 from pgvector.asyncpg import register_vector
 from ollama import AsyncClient
 
-# Read DB connection settings from environment variables with local fallback
+# 1. Read DB connection settings from environment variables with Docker-aware fallbacks
 DB_CONFIG = {
     "user": os.getenv("DB_USER", "postgres"),
     "password": os.getenv("DB_PASSWORD", "password"),
     "database": os.getenv("DB_NAME", "ai_memory"),
-    "host": os.getenv("DB_HOST", "127.0.0.1"),
+    "host": os.getenv("DB_HOST", "postgres"),  # Points to 'postgres' container service name
     "port": int(os.getenv("DB_PORT", 5432))
 }
 
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+# 2. Ollama connection setup with host.docker.internal fallback
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 ollama_client = AsyncClient(host=OLLAMA_URL)
 
 EMBEDDING_MODEL = "nomic-embed-text"
-# nomic-embed-text outputs 768-dimensional vectors
 VECTOR_DIMENSIONS = 768 
 
 async def get_db_connection():
     """Establishes an async connection to PostgreSQL and registers pgvector."""
     conn = await asyncpg.connect(**DB_CONFIG)
-    # Enable vector extension in Postgres if not enabled
     await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-    # Register the pgvector type converter for asyncpg
     await register_vector(conn)
     return conn
 
 async def init_db():
-    """Initializes the documents table with a vector column."""
+    """Initializes the knowledge_base table with an HNSW vector index."""
     conn = await get_db_connection()
     try:
         await conn.execute(f"""
@@ -40,7 +38,6 @@ async def init_db():
                 embedding vector({VECTOR_DIMENSIONS})
             );
         """)
-        # Create an HNSW index for fast approximate nearest neighbor search
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS knowledge_base_embedding_idx 
             ON knowledge_base USING hnsw (embedding vector_cosine_ops);
@@ -72,13 +69,33 @@ async def insert_document(content: str):
 
 async def search_similar_documents(query: str, limit: int = 2) -> list[str]:
     """
-    Converts query to an embedding and runs cosine similarity (<=>) search in Postgres.
+    Ensures table exists, converts query to an embedding, and runs cosine search.
     """
-    query_embedding = await generate_embedding(query)
-    conn = await get_db_connection()
+    # Auto-initialize DB schema if it doesn't exist yet
     try:
-        # PostgreSQL pgvector operator <=> calculates Cosine Distance
-        # Ordering by distance ASC returns the most similar records first
+        conn = await get_db_connection()
+    except Exception as e:
+        print(f"❌ Database connection error: {e}")
+        raise e
+
+    try:
+        # Check if table exists; if not, initialize and seed sample data
+        table_exists = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'knowledge_base'
+            );
+        """)
+        
+        if not table_exists:
+            print("⚙️ Table 'knowledge_base' not found. Initializing database...")
+            await conn.close()
+            await init_db()
+            await seed_initial_knowledge()
+            conn = await get_db_connection()
+
+        query_embedding = await generate_embedding(query)
+
         rows = await conn.fetch("""
             SELECT content, (embedding <=> $1) as distance
             FROM knowledge_base
@@ -89,3 +106,14 @@ async def search_similar_documents(query: str, limit: int = 2) -> list[str]:
         return [row["content"] for row in rows]
     finally:
         await conn.close()
+
+async def seed_initial_knowledge():
+    """Seeds sample documents into the vector database for testing."""
+    sample_docs = [
+        "System administrators should reboot the main database cluster every Sunday at 02:00 UTC.",
+        "The AI Gateway API handles asynchronous token streaming using Server-Sent Events (SSE).",
+        "PostgreSQL pgvector extension uses HNSW indexing for fast vector similarity searches."
+    ]
+    for doc in sample_docs:
+        await insert_document(doc)
+    print("🌱 Initial knowledge base successfully seeded!")

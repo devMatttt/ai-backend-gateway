@@ -1,6 +1,6 @@
 import json
+import os
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -12,7 +12,7 @@ app = FastAPI(
     description="High-throughput streaming API for local LLM inference."
 )
 
-# Enable CORS for frontend clients (React, Next.js, Vue)
+# Enable CORS for frontend clients
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,12 +21,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize the non-blocking async client
-ollama_client = AsyncClient()
+# Dynamically resolve host URL: uses Docker environment variable or defaults to local host
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+ollama_client = AsyncClient(host=OLLAMA_URL)
+
 
 class ChatRequest(BaseModel):
     prompt: str
     model: str = "qwen2.5:3b"
+
 
 async def event_stream_generator(prompt: str, model: str):
     """
@@ -45,7 +48,7 @@ async def event_stream_generator(prompt: str, model: str):
         async for chunk in async_stream:
             content = chunk.get("message", {}).get("content", "")
             if content:
-                # Format payload according to the SSE specification
+                # Format payload according to SSE specification
                 payload = json.dumps({"token": content})
                 yield f"data: {payload}\n\n"
                 
@@ -55,6 +58,7 @@ async def event_stream_generator(prompt: str, model: str):
     except Exception as e:
         error_payload = json.dumps({"error": str(e)})
         yield f"data: {error_payload}\n\n"
+
 
 @app.post("/api/v1/chat/stream")
 async def stream_chat(request: ChatRequest):
@@ -68,6 +72,7 @@ async def stream_chat(request: ChatRequest):
         event_stream_generator(request.prompt, request.model),
         media_type="text/event-stream"
     )
+
 
 @app.post("/api/v1/chat/rag")
 async def stream_rag_chat(request: ChatRequest):
@@ -91,17 +96,19 @@ Context:
 Question: {request.prompt}
 Answer:"""
 
-    # 3. Stream through our existing generator
+    # 3. Stream through existing generator
     return StreamingResponse(
         event_stream_generator(augmented_prompt, request.model),
         media_type="text/event-stream"
     )
 
+
 @app.get("/")
 async def serve_frontend():
     return FileResponse("index.html")
 
+
 if __name__ == "__main__":
     import uvicorn
-    # Run server on port 8000 with auto-reload enabled
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    # Bind to 0.0.0.0 so the container listens across all network interfaces
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
