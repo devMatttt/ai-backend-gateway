@@ -1,5 +1,3 @@
-version: '3.8'
-
 networks:
   ai-backend-network:
     driver: bridge
@@ -11,23 +9,28 @@ volumes:
     driver: local
 
 services:
-  # --- 1. FastAPI Application Gateway ---
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai_fastapi_gateway
+    container_name: max_ai
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - PYTHONPATH=/workspace
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=ai_memory
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    volumes:
+      - .:/workspace
     ports:
       - "8000:8000"
-    environment:
-          - DB_HOST=postgres
-          - DB_PORT=5432
-          - DB_USER=postgres
-          - DB_PASSWORD=password
-          - DB_NAME=ai_memory
-          - REDIS_HOST=redis
-          - REDIS_PORT=6379
-          - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,6 +52,7 @@ services:
       - POSTGRES_DB=ai_memory
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./app/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d ai_memory"]
       interval: 5s

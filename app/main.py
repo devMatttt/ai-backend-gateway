@@ -1,18 +1,22 @@
-import json
-import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
-from ollama import AsyncClient
-from rag_service import search_similar_documents
+from fastapi.responses import FileResponse
+from app.api.routes import chat, memory
+# from contextlib import asynccontextmanager
+# from app.db.session import init_db
+
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # Runs automatically on container / server boot
+#     await init_db()
+#     yield
+#     # Cleanup logic (if any) goes here
 
 app = FastAPI(
-    title="Async AI Backend Gateway",
+    title="Max AI - backend",
     description="High-throughput streaming API for local LLM inference."
 )
 
-# Enable CORS for frontend clients
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,94 +25,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Dynamically resolve host URL: uses Docker environment variable or defaults to local host
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-ollama_client = AsyncClient(host=OLLAMA_URL)
-
-
-class ChatRequest(BaseModel):
-    prompt: str
-    model: str = "qwen2.5:3b"
-
-
-async def event_stream_generator(prompt: str, model: str):
-    """
-    Async generator that yields tokens from the GPU as Server-Sent Events (SSE).
-    """
-    try:
-        messages = [{"role": "user", "content": prompt}]
-        
-        # Request an async stream from the model engine
-        async_stream = await ollama_client.chat(
-            model=model,
-            messages=messages,
-            stream=True
-        )
-        
-        async for chunk in async_stream:
-            content = chunk.get("message", {}).get("content", "")
-            if content:
-                # Format payload according to SSE specification
-                payload = json.dumps({"token": content})
-                yield f"data: {payload}\n\n"
-                
-        # Signal completion to the client
-        yield "data: [DONE]\n\n"
-
-    except Exception as e:
-        error_payload = json.dumps({"error": str(e)})
-        yield f"data: {error_payload}\n\n"
-
-
-@app.post("/api/v1/chat/stream")
-async def stream_chat(request: ChatRequest):
-    """
-    HTTP POST endpoint that streams LLM tokens asynchronously.
-    """
-    if not request.prompt.strip():
-        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-
-    return StreamingResponse(
-        event_stream_generator(request.prompt, request.model),
-        media_type="text/event-stream"
-    )
-
-
-@app.post("/api/v1/chat/rag")
-async def stream_rag_chat(request: ChatRequest):
-    """
-    Retrieves relevant database context using pgvector cosine search, 
-    injects context into the system prompt, and streams the answer.
-    """
-    if not request.prompt.strip():
-        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-
-    # 1. Retrieve top 2 matching document chunks from Postgres
-    context_chunks = await search_similar_documents(request.prompt, limit=2)
-    context_str = "\n".join(f"- {c}" for c in context_chunks)
-
-    # 2. Construct Augmented Prompt
-    augmented_prompt = f"""Use the following facts to answer the question:
-
-Context:
-{context_str}
-
-Question: {request.prompt}
-Answer:"""
-
-    # 3. Stream through existing generator
-    return StreamingResponse(
-        event_stream_generator(augmented_prompt, request.model),
-        media_type="text/event-stream"
-    )
-
+# Attach router modules
+app.include_router(chat.router, prefix="/api/v1")
+app.include_router(memory.router, prefix="/api/v1")
 
 @app.get("/")
 async def serve_frontend():
     return FileResponse("index.html")
 
-
-if __name__ == "__main__":
-    import uvicorn
-    # Bind to 0.0.0.0 so the container listens across all network interfaces
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+@app.get("/health")
+async def health_check():
+    return {"status": "online"}
