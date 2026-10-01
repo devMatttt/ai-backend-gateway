@@ -5,6 +5,18 @@ from app.api.routes import chat, memory
 # from contextlib import asynccontextmanager
 # from app.db.session import init_db
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+logger = logging.getLogger(__name__)
+
+logger.info("Max ai start running...")
+
 # @asynccontextmanager
 # async def lifespan(app: FastAPI):
 #     # Runs automatically on container / server boot
